@@ -1,63 +1,43 @@
 
 #include <GL/glew.h>
 #include <GL/freeglut.h>
+#include <glm/glm.hpp>
 #include <iostream>
+#include <fstream>
+
+#include "Shader.h"
+#include "BufferObjectHandler.h"
 
 // Macro for indexing vertex buffer
 #define BUFFER_OFFSET(i) ((char *)NULL + (i))
 
 using namespace std;
+using namespace glm;
 
-// EX 2.3 and 2.4
 GLuint VAOs[2];
-GLuint shaderProgramIDs[2]; // Added for 2.4
-
-// Vertex Shader (for convenience, it is defined in the main here, but we will be using text files for shaders in future)
-// Note: Input to this shader is the vertex positions that we specified for the triangle. 
-// Note: gl_Position is a special built-in variable that is supposed to contain the vertex position (in X, Y, Z, W)
-// Since our triangle vertices were specified as vec3, we just set W to 1.0.
-
-static const char* pVS = "                                                    \n\
-#version 330                                                                  \n\
-                                                                              \n\
-in vec3 vPosition;															  \n\
-in vec4 vColor;																  \n\
-out vec4 color;																 \n\
-                                                                              \n\
-                                                                               \n\
-void main()                                                                     \n\
-{                                                                                \n\
-    gl_Position = vec4(vPosition.x, vPosition.y, vPosition.z, 1.0);  \n\
-	color = vColor;							\n\
-}";
-
-// Fragment Shader (modified in EX 2.1)
-static const char* pFS = "                                              \n\
-																			\n\
-in vec4 color;	                                                           \n\
-out vec4 FragColor;                                                      \n\
-                                                                          \n\
-void main()                                                               \n\
-{                                                                          \n\
-FragColor = color;								 \n\
-}";
-
-// Fragment Shader yellow (EX 2.4)
-static const char* pFSYellow = "                                        \n\
-#version 330                                                            \n\
-                                                                       \n\
-out vec4 FragColor;                                                      \n\
-                                                                          \n\
-void main()                                                               \n\
-{                                                                          \n\
-FragColor = vec4(1.0, 1.0, 0.0, 1.0);		           \n\
-}";
-
+Shader firstShader, secondShader;
+GLint gScaleLocation, gColorLocation;
+float myScale = 0.5;
+vec4 color = vec4(1.0, 1.0, 0.0, 1.0);
 
 // Shader Functions- click on + to expand
 #pragma region SHADER_FUNCTIONS
-static void AddShader(GLuint ShaderProgram, const char* pShaderText, GLenum ShaderType)
+static void AddShader(GLuint ShaderProgram, const char* path, GLenum ShaderType)
 {
+	// Load shader file as text
+	string shaderContent;
+	ifstream inputFileStream(PATH_TO_SHADERS + path, ios::in);
+	if (inputFileStream.is_open()) {
+		shaderContent = string(istreambuf_iterator<char>(inputFileStream), istreambuf_iterator<char>());
+		inputFileStream.close();
+	}
+	else {
+		cout << "could not open " << path << endl;
+		return;
+	}
+	//Convert shader content text (string) to char*
+	const char* shaderContentCStr = shaderContent.c_str();
+
 	// create a shader object
     GLuint ShaderObj = glCreateShader(ShaderType);
 
@@ -66,7 +46,7 @@ static void AddShader(GLuint ShaderProgram, const char* pShaderText, GLenum Shad
         exit(0);
     }
 	// Bind the source code to the shader, this happens before compilation
-	glShaderSource(ShaderObj, 1, (const GLchar**)&pShaderText, NULL);
+	glShaderSource(ShaderObj, 1, (const GLchar**)&shaderContentCStr, NULL);
 	// compile the shader and check for errors
     glCompileShader(ShaderObj);
     GLint success;
@@ -82,8 +62,7 @@ static void AddShader(GLuint ShaderProgram, const char* pShaderText, GLenum Shad
     glAttachShader(ShaderProgram, ShaderObj);
 }
 
-// EX 2.4 fragmentShader added as a parameter
-GLuint CompileShaders(const char *fragmentShader)
+GLuint CompileShaders(const char* vertexShaderPath, const char *fragmentShaderPath)
 {
 	//Start the process of setting up our shaders by creating a program ID
 	//Note: we will link all the shaders together into this ID
@@ -94,12 +73,11 @@ GLuint CompileShaders(const char *fragmentShader)
     }
 
 	// Create two shader objects, one for the vertex, and one for the fragment shader
-    AddShader(shaderProgramID, pVS, GL_VERTEX_SHADER);
-    AddShader(shaderProgramID, fragmentShader, GL_FRAGMENT_SHADER);
+    AddShader(shaderProgramID, vertexShaderPath, GL_VERTEX_SHADER);
+    AddShader(shaderProgramID, fragmentShaderPath, GL_FRAGMENT_SHADER);
 
     GLint Success = 0;
     GLchar ErrorLog[1024] = { 0 };
-
 
 	// After compiling all shader objects and attaching them to the program, we can finally link it
     glLinkProgram(shaderProgramID);
@@ -120,17 +98,28 @@ GLuint CompileShaders(const char *fragmentShader)
         fprintf(stderr, "Invalid shader program: '%s'\n", ErrorLog);
         exit(1);
     }
-	// Finally, use the linked shader program
-	// Note: this program will stay in effect for all draw calls until you replace it with another or explicitly disable its use
     glUseProgram(shaderProgramID);
+
+	// Uniforms
+	gScaleLocation = glGetUniformLocation(shaderProgramID, "gScale");
+	if (gScaleLocation == -1) {
+		fprintf(stderr, "Error getting location of uniform 'gScale'\n");
+		exit(1);
+	}
+	gColorLocation = glGetUniformLocation(shaderProgramID, "gColor");
+	if (gColorLocation == -1) {
+		fprintf(stderr, "Error getting location of uniform 'gColor'\n");
+		exit(1);
+	}
+
 	return shaderProgramID;
 }
 #pragma endregion SHADER_FUNCTIONS
 
 // VBO Functions - click on + to expand
 #pragma region VBO_FUNCTIONS
-GLuint generateObjectBuffer(GLfloat vertices[], GLfloat colors[]) {
-	GLuint numVertices = 3; // 5 for EX 2.2
+void generateObjectBuffer(vec3 vertices[], vec4 colors[]) {
+	GLuint numVertices = 3; 
 	// Genderate 1 generic buffer object, called VBO
 	GLuint VBO;
  	glGenBuffers(1, &VBO);
@@ -142,11 +131,11 @@ GLuint generateObjectBuffer(GLfloat vertices[], GLfloat colors[]) {
 	// if you have more data besides vertices (e.g., vertex colours or normals), use glBufferSubData to tell the buffer when the vertices array ends and when the colors start
 	glBufferSubData (GL_ARRAY_BUFFER, 0, numVertices*3*sizeof(GLfloat), vertices);
 	glBufferSubData (GL_ARRAY_BUFFER, numVertices*3*sizeof(GLfloat), numVertices*4*sizeof(GLfloat), colors);
-return VBO;
+
 }
 
 void linkCurrentBuffertoShader(GLuint shaderProgramID){
-	GLuint numVertices = 3; // 5 for EX 2.2
+	GLuint numVertices = 3; 
 	// find the location of the variables that we will be using in the shader program
 	GLuint positionID = glGetAttribLocation(shaderProgramID, "vPosition");
 	GLuint colorID = glGetAttribLocation(shaderProgramID, "vColor");
@@ -160,26 +149,55 @@ void linkCurrentBuffertoShader(GLuint shaderProgramID){
 }
 #pragma endregion VBO_FUNCTIONS
 
+void specialKeyboardEvent(int key, int x, int y) {
 
-void display(){
+	switch (key) {
+		case GLUT_KEY_UP:
+			color.r += 0.01f; break;
+		case GLUT_KEY_RIGHT:
+			color.g += 0.01f; break;
+		case GLUT_KEY_DOWN:
+			color.r -= 0.01f; break;
+		case GLUT_KEY_LEFT:
+			color.g -= 0.01f; break;
+	}
+}
 
-	glClear(GL_COLOR_BUFFER_BIT);
-	// NB: Make the call to draw the geometry in the currently activated vertex buffer. This is where the GPU starts to work!
-	// EX 2.2
-	//glDrawArrays(GL_TRIANGLES, 0, 3);
-	//glDrawArrays(GL_TRIANGLES, 2, 3);
+void mouseEvent(int button, int state, int x, int y) {
 
-	// EX 2.3 and 2.4
+	switch (button) {
+		case GLUT_LEFT_BUTTON:
+			if (state == GLUT_UP) {
+				myScale += 0.01f;
+			}
+			break;
+		case GLUT_RIGHT_BUTTON:
+			if (state == GLUT_UP) { 
+				myScale -= 0.01f;
+			}
+			break;
+	}
+}
+
+void display() {
+	// Clearing the window
+	glClearColor(0.0, 0.0, 0.0, 0.0);
+	glClearDepth(0.0);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
 	//Triangle 1
-	glUseProgram(shaderProgramIDs[0]); // Added for 2.4
+	firstShader.use();
 	glBindVertexArray(VAOs[0]);
-	glDrawArrays(GL_TRIANGLES, 0, 3);
-	//Triangle 2
-	glUseProgram(shaderProgramIDs[1]); // Added for 2.4
-	glBindVertexArray(VAOs[1]);
+	firstShader.setUniform1f("gScale", myScale);
+	firstShader.setUniform4fv("gColor", 1, color);
 	glDrawArrays(GL_TRIANGLES, 0, 3);
 
-	glFlush();
+	//Triangle 2
+	secondShader.use();
+	glBindVertexArray(VAOs[1]);
+	secondShader.setUniform1f("gScale", myScale);
+	secondShader.setUniform4fv("gColor", 1, color);
+	glDrawArrays(GL_TRIANGLES, 0, 3);
 
     glutSwapBuffers();
 }
@@ -187,55 +205,29 @@ void display(){
 
 void init()
 {
-	//EX 2.1 & 2.2
-	/*
-	// Create 3 vertices that make up a triangle that fits on the viewport 
-	GLfloat vertices[] = {-1.0f, -1.0f, 0.0f,
-			-0.5f, 1.0f, 0.0f,
-			0.0f, -1.0f, 0.0f,
-			1.0f, -1.0f, 0.0f,
-			0.5f, 1.0f, 0.0f };
-	// Create a color array that identfies the colors of each vertex (format R, G, B, A)
-	GLfloat colors[] = {0.0f, 1.0f, 0.0f, 1.0f,
-			1.0f, 0.0f, 0.0f, 1.0f,
-			0.0f, 0.0f, 1.0f, 1.0f,
-			1.0f, 0.0f, 0.0f, 1.0f,
-			0.0f, 0.0f, 1.0f, 1.0f };
-	// Set up the shaders
-	GLuint shaderProgramID = CompileShaders(pFS);
-	// Put the vertices and colors into a vertex buffer object
-	generateObjectBuffer(vertices, colors);
-	// Link the current buffer to the shader
-	linkCurrentBuffertoShader(shaderProgramID);
-	*/
-
-	//EX 2.3 and 2.4
 	glGenVertexArrays(2, VAOs);
 
-	GLfloat triangle1[] = { -1.0f, -1.0f, 0.0f,
-		-0.5f, 1.0f, 0.0f,
-		0.0f, -1.0f, 0.0f };
-	GLfloat colors1[] = { 0.0f, 1.0f, 0.0f, 1.0f,
-			1.0f, 0.0f, 0.0f, 1.0f,
-			0.0f, 0.0f, 1.0f, 1.0f };
-	GLfloat triangle2[] = { 0.0f, -1.0f, 0.0f,
-		0.5f, 1.0f, 0.0f,
-		1.0f, -1.0f, 0.0f };
-	GLfloat colors2[] = { 0.0f, 0.0f, 1.0f, 1.0f,
-			1.0f, 0.0f, 0.0f, 1.0f,
-			0.0f, 0.0f, 1.0f, 1.0f };	
+	vec3 triangle1[] = { vec3(-1.0f, -1.0f, 0.0f),
+		vec3(-0.5f, 1.0f, 0.0f),
+		vec3(0.0f, -1.0f, 0.0f )};
+	vec4 colors[] = { vec4(0.0f, 1.0f, 0.0f, 1.0f),
+		vec4(1.0f, 0.0f, 0.0f, 1.0f),
+		vec4(0.0f, 0.0f, 1.0f, 1.0f) };
+	vec3 triangle2[] = { vec3(0.0f, -1.0f, 0.0f),
+		vec3(0.5f, 1.0f, 0.0f),
+		vec3(1.0f, -1.0f, 0.0f) };
 
 	//Triangle 1
 	glBindVertexArray(VAOs[0]);
-	shaderProgramIDs[0] = CompileShaders(pFS);
-	generateObjectBuffer(triangle1, colors1);
-	linkCurrentBuffertoShader(shaderProgramIDs[0]);
+	firstShader = Shader("pVS.vs", "pFS.fs");
+	BufferObjectHandler::generateBufferObject(3, triangle1, colors);
+	BufferObjectHandler::linkCurrentBufferToShader(firstShader, 3);
 
 	//Triangle 2
 	glBindVertexArray(VAOs[1]);
-	shaderProgramIDs[1] = CompileShaders(pFSYellow);
-	generateObjectBuffer(triangle2, colors2);
-	linkCurrentBuffertoShader(shaderProgramIDs[1]);
+	secondShader = Shader("pVS.vs", "pFS2.fs");
+	BufferObjectHandler::generateBufferObject(3, triangle2, colors);
+	BufferObjectHandler::linkCurrentBufferToShader(secondShader, 3);
 }
 
 int main(int argc, char** argv){
@@ -244,10 +236,13 @@ int main(int argc, char** argv){
 	glutInit(&argc, argv);
     glutInitDisplayMode(GLUT_DOUBLE|GLUT_RGB);
     glutInitWindowSize(800, 600);
-    glutCreateWindow("Hello Triangle");
+    glutCreateWindow("Lab 2");
 
-	// Tell glut where the display function is
+	// Set the callbacks
 	glutDisplayFunc(display);
+	glutIdleFunc(display);
+	glutSpecialFunc(specialKeyboardEvent);
+	glutMouseFunc(mouseEvent);
 
 	 // A call to glewInit() must be done after glut is initialized!
     GLenum res = glewInit();
